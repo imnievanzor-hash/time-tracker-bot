@@ -1,7 +1,7 @@
 import os, re, json, logging
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -19,16 +19,15 @@ def save_data(data):
 
 def main_keyboard():
     return ReplyKeyboardMarkup(
-        [["📋 Мои записи", "📊 Отчёт за месяц"], ["❓ Помощь"]],
+        [["📋 Мои записи", "📊 Отчёт за месяц"],
+         ["👤 По сотруднику", "❓ Помощь"]],
         resize_keyboard=True
     )
 
 def parse_date(s):
-    """Пробует разные форматы даты, возвращает YYYY-MM-DD или None"""
     s = s.strip()
     today = datetime.now()
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y",
-                "%d.%m", "%d/%m", "%d-%m"):
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%d.%m", "%d/%m", "%d-%m"):
         try:
             d = datetime.strptime(s, fmt)
             if d.year == 1900:
@@ -39,29 +38,16 @@ def parse_date(s):
     return None
 
 def smart_parse(text):
-    """
-    Умный парсер: ищет в тексте имя, дату и часы в любом порядке.
-    Возвращает (name, date_str, hours) или None.
-    """
-    # Разбиваем по любому разделителю: |, -, /
     parts = [p.strip() for p in re.split(r"[|\-/,;]+", text) if p.strip()]
-    
-    # Также пробуем разбить просто по пробелам если частей < 3
     if len(parts) < 3:
         parts = text.split()
-
-    date_str = None
-    hours_val = None
-    name_parts = []
-
+    date_str, hours_val, name_parts = None, None, []
     for part in parts:
-        # Проверяем дату
         if date_str is None:
             d = parse_date(part)
             if d:
                 date_str = d
                 continue
-        # Проверяем число (часы)
         if hours_val is None:
             try:
                 h = float(part.replace(",", "."))
@@ -70,15 +56,13 @@ def smart_parse(text):
                     continue
             except ValueError:
                 pass
-        # Остальное — имя
         name_parts.append(part)
-
     name = " ".join(name_parts).strip()
-
     if name and date_str and hours_val is not None:
         return name, date_str, hours_val
     return None
 
+# ─── Команды ────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👷 *Учёт рабочего времени*\n\n"
@@ -86,8 +70,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Примеры:\n"
         "`Anzor 2026-03-28 8`\n"
         "`Anzor | 28.03 | 8`\n"
-        "`Anzor 28/03/2026 7.5`\n"
-        "`Anzor - 28.03 - 8`\n",
+        "`Anzor - 28/03/2026 - 7.5`\n",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
@@ -98,9 +81,10 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Пиши в *любом* формате:\n"
         "`Anzor 28.03 8`\n"
         "`Anzor | 2026-03-28 | 8`\n"
-        "`Anzor - 28/03/2026 - 7.5`\n\n"
+        "`Anzor - 28/03 - 7.5`\n\n"
         "📋 *Мои записи* — все записи за текущий месяц\n"
-        "📊 *Отчёт за месяц* — итоги по сотрудникам и дням\n\n"
+        "📊 *Отчёт за месяц* — итоги по всем сотрудникам\n"
+        "👤 *По сотруднику* — детальный отчёт по дням\n\n"
         "💡 Повторная запись за тот же день — суммируется.",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
@@ -146,10 +130,91 @@ async def show_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🔢 *Всего часов: {total}*")
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
+# ─── По сотруднику ──────────────────────────────────────────────────
+async def by_employee_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показывает кнопки с именами всех сотрудников"""
+    data = load_data()
+    if not data:
+        await update.message.reply_text("📭 Нет данных.", reply_markup=main_keyboard())
+        return
+
+    # Собираем уникальные имена
+    names = sorted(set(key.rsplit("|", 1)[0].strip() for key in data.keys()))
+
+    buttons = [[InlineKeyboardButton(f"👷 {name}", callback_data=f"emp:{name}")] for name in names]
+    await update.message.reply_text(
+        "👤 *Выбери сотрудника:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+async def employee_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показывает все дни выбранного сотрудника"""
+    query = update.callback_query
+    await query.answer()
+
+    name = query.data.replace("emp:", "")
+    data = load_data()
+    now = datetime.now()
+    month_key = f"{now.year}-{now.month:02d}"
+
+    # Все записи этого сотрудника за текущий месяц
+    entries = []
+    for key, hours in data.items():
+        emp, date = key.rsplit("|", 1)
+        if emp.strip() == name and date.strip().startswith(month_key):
+            entries.append((date.strip(), hours))
+
+    if not entries:
+        await query.edit_message_text(f"📭 У *{name}* нет записей за этот месяц.", parse_mode="Markdown")
+        return
+
+    entries.sort(key=lambda x: x[0])
+    total = sum(h for _, h in entries)
+    days = len(entries)
+
+    lines = []
+    for date, hours in entries:
+        # Красивый формат даты: 28.03.2026
+        try:
+            d = datetime.strptime(date, "%Y-%m-%d")
+            nice_date = d.strftime("%d.%m.%Y (%a)").replace(
+                "Mon", "Пн").replace("Tue", "Вт").replace("Wed", "Ср").replace(
+                "Thu", "Чт").replace("Fri", "Пт").replace("Sat", "Сб").replace("Sun", "Вс")
+        except:
+            nice_date = date
+        lines.append(f"  📅 {nice_date} — *{hours} ч*")
+
+    text = (
+        f"👷 *{name}*\n"
+        f"📆 {now.strftime('%B %Y')}\n\n"
+        + "\n".join(lines) +
+        f"\n\n📊 Рабочих дней: *{days}*\n"
+        f"⏱ Итого часов: *{total} ч*"
+    )
+    # Кнопка назад
+    back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="emp_back")]])
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_btn)
+
+async def employee_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Возврат к списку сотрудников"""
+    query = update.callback_query
+    await query.answer()
+    data = load_data()
+    names = sorted(set(key.rsplit("|", 1)[0].strip() for key in data.keys()))
+    buttons = [[InlineKeyboardButton(f"👷 {name}", callback_data=f"emp:{name}")] for name in names]
+    await query.edit_message_text(
+        "👤 *Выбери сотрудника:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# ─── Обработка сообщений ────────────────────────────────────────────
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if text == "📋 Мои записи": return await show_records(update, ctx)
     if text == "📊 Отчёт за месяц": return await show_report(update, ctx)
+    if text == "👤 По сотруднику": return await by_employee_menu(update, ctx)
     if text == "❓ Помощь": return await help_cmd(update, ctx)
 
     parsed = smart_parse(text)
@@ -171,9 +236,12 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard()
         )
 
+# ─── Запуск ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CallbackQueryHandler(employee_detail, pattern="^emp:"))
+    app.add_handler(CallbackQueryHandler(employee_back, pattern="^emp_back$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()

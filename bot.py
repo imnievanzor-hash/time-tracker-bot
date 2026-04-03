@@ -477,7 +477,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if text == "📋 Мои записи":    return await show_records(update, ctx)
     if text == "📊 Отчёт за месяц": return await show_report(update, ctx)
     if text == "👤 По сотруднику":  return await by_employee_menu(update, ctx)
-    if text == "💵 Авансы":         return await advances_menu(update, ctx)
+    if text == "💶 Авансы":         return await advances_menu(update, ctx)
     if text == "❓ Помощь":         return await help_cmd(update, ctx)
 
     # Проверяем аванс первым

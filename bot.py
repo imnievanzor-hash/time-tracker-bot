@@ -48,7 +48,7 @@ def get_available_months(data):
 def main_keyboard():
     return ReplyKeyboardMarkup(
         [["📋 Мои записи", "📊 Отчёт за месяц"],
-         ["👤 По сотруднику", "💵 Авансы"],
+         ["👤 По сотруднику", "💶 Авансы"],
          ["❓ Помощь"]],
         resize_keyboard=True
     )
@@ -78,17 +78,17 @@ def parse_date(s):
 
 def parse_advance(text):
     """
-    Парсит аванс в форматах:
-      SolarexpertDE Anzor 500
-      SolarexpertDE Anzor 500 28.03
-      SolarexpertDE Anzor 28.03 500
+    Рабочий сам пишет:
+      аванс Anzor 500
+      аванс Anzor 500 28.03
+      аванс Anzor 28.03 500
+      avans Anzor 500
     """
     text = text.strip()
     lower = text.lower()
-    if not lower.startswith("solarexpertde"):
+    if not (lower.startswith("аванс") or lower.startswith("avans")):
         return None
-    # убираем ключевое слово
-    rest = re.sub(r"^solarexpertde\s*", "", text, flags=re.IGNORECASE).strip()
+    rest = re.sub(r"^(аванс|avans)\s*", "", text, flags=re.IGNORECASE).strip()
     parts = [p.strip() for p in re.split(r"[\s|,;]+", rest) if p.strip()]
 
     date_str, amount, name_parts = None, None, []
@@ -174,9 +174,9 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "👤 *По сотруднику* — детальный отчёт по дням\n\n"
         "💡 Повторная запись за тот же день — суммируется.\n"
         "📅 Можно смотреть любой прошлый месяц!\n\n"
-        "💶 *Аванс:*\n"
-        "`SolarexpertDE Anzor 500`\n"
-        "`SolarexpertDE Anzor 500 28.03`",
+        "💶 *Аванс (пишет сам рабочий):*\n"
+        "`аванс Anzor 500`\n"
+        "`аванс Anzor 500 28.03`",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
